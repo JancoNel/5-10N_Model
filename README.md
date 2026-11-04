@@ -14,16 +14,23 @@ capitalization within the top five. Set `WEIGHT_BY_MARKET_CAP` to `False` in
 `BACKTEST_END` there to change the date range; `BACKTEST_END = None` uses the
 latest available data.
 
-The S&P 500 ticker list is downloaded automatically from the
-[datasets/s-and-p-500-companies](https://github.com/datasets/s-and-p-500-companies)
-CSV when the script runs. Network access is required.
+On Windows, run `setup.bat` to create and activate a virtual environment,
+install requirements, and start the backtest:
 
-Install dependencies and run:
+```bat
+setup.bat
+```
+
+Alternatively, install dependencies and run manually:
 
 ```powershell
 python -m pip install -r requirements.txt
 python main.py
 ```
+
+The S&P 500 ticker list is downloaded automatically from the
+[datasets/s-and-p-500-companies](https://github.com/datasets/s-and-p-500-companies)
+CSV when the script runs. Network access is required.
 
 Yahoo Finance does not provide a complete historical series of market-cap
 rankings through this simple workflow. Therefore, the current top five are
