@@ -3,7 +3,7 @@
 A simple trading/backtesting experiment exploring the returns of a portfolio concentrated in the five largest S&P 500 companies.
 
 > **Disclaimer:** This project is an amateur experiment, not professional financial research or investment advice. The idea came about rather randomly one evening after noticing that some of the largest S&P 500 companies tend to account for a disproportionate share of the index's overall returns. I decided to see what would happen if a portfolio simply held the five largest companies by market capitalization and how that strategy would perform historically.
->
+> This project is pretty old, I just did final touches today before releasing so dont ask me questions because I cant rmemeber much my logic for this.
 > This is an exploratory project built out of curiosity. It is not intended to be a sophisticated trading strategy, nor should its backtest results be interpreted as an indication of future performance.
 
 ## **Backtest**
