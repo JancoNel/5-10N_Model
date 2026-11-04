@@ -1,107 +1,161 @@
+import csv
+from io import StringIO
+from pathlib import Path
+from urllib.request import urlopen
+
+import matplotlib.pyplot as plt
+from matplotlib.ticker import PercentFormatter
+import pandas as pd
 import yfinance as yf
-import time
-import os
- 
-# ----------------------------
-# User-defined parameters
-# Top N stocks to hold
+
+
 TOP_N = 5
- 
-# Weighting per stock (percent)
-i_first = 20
-i_second = 20
-i_third = 20
-i_fourth = 20
-i_five = 20
-# Add more if TOP_N > 5
-weight_vars = [i_first, i_second, i_third, i_fourth, i_five][:TOP_N]
- 
-# Files
-UNIVERSE_FILE = "SP500.txt"
-LAST_FILE = "last.txt"
- 
-# ----------------------------
-def load_universe(file=UNIVERSE_FILE):
-    if not os.path.exists(file):
-        raise FileNotFoundError(f"{file} not found. Please provide SP500 tickers.")
-    with open(file, "r") as f:
-        tickers = [line.strip().upper() for line in f.readlines()]
+BACKTEST_START = "2019-01-01"
+BACKTEST_END = None
+WEIGHT_BY_MARKET_CAP = True
+
+UNIVERSE_URL = (
+    "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/"
+    "master/data/constituents.csv"
+)
+PLOT_FILE = Path(__file__).with_name("backtest_returns.png")
+
+
+def load_universe() -> list[str]:
+    try:
+        with urlopen(UNIVERSE_URL, timeout=30) as response:
+            content = response.read().decode("utf-8")
+    except (OSError, UnicodeError) as error:
+        raise RuntimeError(
+            f"Could not download the S&P 500 ticker list from {UNIVERSE_URL}"
+        ) from error
+
+    reader = csv.DictReader(StringIO(content))
+    if not reader.fieldnames or "Symbol" not in reader.fieldnames:
+        raise ValueError(f"The ticker list from {UNIVERSE_URL} has no Symbol column.")
+
+    tickers = list(
+        dict.fromkeys(
+            row["Symbol"].strip().upper().replace(".", "-")
+            for row in reader
+            if row.get("Symbol") and row["Symbol"].strip()
+        )
+    )
+    if not tickers:
+        raise ValueError(f"The ticker list from {UNIVERSE_URL} is empty.")
     return tickers
- 
-# ----------------------------
-def get_top_n_by_market_cap(tickers, n=TOP_N):
-    market_caps = {}
+
+
+def get_top_n_by_market_cap(
+    tickers: list[str], n: int = TOP_N
+) -> list[tuple[str, float]]:
+    market_caps = []
     for ticker in tickers:
-        try:
-            info = yf.Ticker(ticker).info
-            market_caps[ticker.upper()] = info.get('marketCap', 0)
-        except Exception as e:
-            print(f"Error fetching {ticker}: {e}")
-            market_caps[ticker.upper()] = 0
-    # Sort descending by market cap and pick top N
-    top_n = sorted(market_caps.items(), key=lambda x: x[1], reverse=True)[:n]
-    tickers_only = [t[0] for t in top_n]
-    tickers_only.sort()  # Alphabetical
-    return tickers_only
- 
-# ----------------------------
-def read_last_file(filename=LAST_FILE):
-    if not os.path.exists(filename):
-        return []
-    with open(filename, "r") as f:
-        tickers = [line.strip().upper() for line in f.readlines()]
-    tickers.sort()
-    return tickers
- 
-def write_last_file(tickers, filename=LAST_FILE):
-    with open(filename, "w") as f:
-        for t in tickers:
-            f.write(f"{t}\n")
- 
-# ----------------------------
-# Main workflow
-def main():
-    universe = load_universe()
-    print(f"Loaded universe of {len(universe)} tickers")
- 
-    while True:
-        print("Fetching top N by market cap...")
-        ArrNew = get_top_n_by_market_cap(universe, TOP_N)
-        print("New top N:", ArrNew)
- 
-        ArrOld = read_last_file()
-        print("Previous top N:", ArrOld)
- 
-        if ArrNew == ArrOld:
-            print("No change in top N. Sleeping 24 hours...")
-            time.sleep(24*60*60)  # Sleep for a day
-            continue
+        market_cap = yf.Ticker(ticker).info.get("marketCap")
+        if market_cap is not None and market_cap > 0:
+            market_caps.append((ticker, float(market_cap)))
         else:
-            print("Top N changed. Rebalancing portfolio...")
- 
-            # ----------------------------
-            # PLACEHOLDER: IBKR API SELL all ArrOld tickers
-            for ticker in ArrOld:
-                print(f"SELL all shares of {ticker} (placeholder)")
- 
-            # ----------------------------
-            # PLACEHOLDER: Fetch account balance from IBKR
-            account_balance = 100000  # Example: $100,000 cash
-            print(f"Account balance: ${account_balance}")
- 
-            # Calculate dollar allocation per ticker based on weight_vars
-            total_weight = sum(weight_vars)
-            for ticker, weight in zip(ArrNew, weight_vars):
-                allocation = (weight / total_weight) * account_balance
-                print(f"BUY ${allocation:.2f} of {ticker} (placeholder)")
- 
-            # ----------------------------
-            # Update last.txt
-            write_last_file(ArrNew)
- 
-            print("Rebalance complete. Sleeping 24 hours...")
-            time.sleep(24*60*60)  # Sleep for a day
- 
-# ----------------------------
+            print(f"Skipping {ticker}: Yahoo Finance did not provide a market cap.")
+
+    top_n = sorted(market_caps, key=lambda item: item[1], reverse=True)[:n]
+    if not top_n:
+        raise ValueError("Yahoo Finance did not return market caps for any ticker.")
+    return top_n
+
+
+def calculate_weights(
+    selected: list[tuple[str, float]], market_cap_weighted: bool
+) -> pd.Series:
+    tickers = [ticker for ticker, _ in selected]
+    if market_cap_weighted:
+        total_market_cap = sum(market_cap for _, market_cap in selected)
+        values = [market_cap / total_market_cap for _, market_cap in selected]
+    else:
+        values = [1 / len(selected)] * len(selected)
+    return pd.Series(values, index=tickers, dtype=float)
+
+
+def download_prices(tickers: list[str]) -> pd.DataFrame:
+    data = yf.download(
+        tickers=tickers,
+        start=BACKTEST_START,
+        end=BACKTEST_END,
+        auto_adjust=True,
+        group_by="column",
+        progress=False,
+    )
+    if data.empty or "Close" not in data:
+        raise ValueError("Yahoo Finance returned no historical closing prices.")
+
+    close = data["Close"]
+    if isinstance(close, pd.Series):
+        close = close.to_frame(name=tickers[0])
+
+    close = close.reindex(columns=tickers).dropna(axis="columns", how="all")
+    missing = sorted(set(tickers) - set(close.columns))
+    if missing:
+        print(f"Skipping tickers with no historical prices: {', '.join(missing)}")
+    if close.empty:
+        raise ValueError("No selected ticker has historical closing prices.")
+    return close
+
+
+def backtest(prices: pd.DataFrame, weights: pd.Series) -> pd.Series:
+    available_tickers = [
+        ticker for ticker in weights.index if ticker in prices.columns
+    ]
+    prices = prices.loc[:, available_tickers].ffill().dropna()
+    if prices.empty:
+        raise ValueError("The selected tickers have no overlapping price history.")
+
+    weights = weights.loc[available_tickers]
+    weights = weights / weights.sum()
+    normalized_prices = prices.div(prices.iloc[0])
+    return normalized_prices.mul(weights, axis="columns").sum(axis="columns")
+
+
+def plot_returns(portfolio_value: pd.Series, tickers: list[str]) -> None:
+    cumulative_returns = portfolio_value - 1
+    _, axis = plt.subplots(figsize=(11, 6))
+    axis.plot(cumulative_returns.index, cumulative_returns, label="Portfolio")
+    axis.set_title(f"Top {len(tickers)} Market-Cap Stocks: Cumulative Return")
+    axis.set_xlabel("Date")
+    axis.set_ylabel("Cumulative return")
+    axis.yaxis.set_major_formatter(PercentFormatter(xmax=1))
+    axis.grid(True, alpha=0.3)
+    axis.legend()
+    plt.tight_layout()
+    plt.savefig(PLOT_FILE, dpi=150)
+    print(f"Saved returns plot to {PLOT_FILE}")
+    plt.show()
+
+
+def main() -> None:
+    universe = load_universe()
+    print(f"Loaded {len(universe)} tickers.")
+
+    selected = get_top_n_by_market_cap(universe)
+    weights = calculate_weights(selected, WEIGHT_BY_MARKET_CAP)
+    print("Selected stocks and portfolio weights:")
+    for ticker, market_cap in selected:
+        print(
+            f"  {ticker}: {weights[ticker]:.1%} "
+            f"(market cap ${market_cap:,.0f})"
+        )
+
+    prices = download_prices([ticker for ticker, _ in selected])
+    available_weights = weights.loc[
+        weights.index.intersection(prices.columns)
+    ]
+    portfolio_value = backtest(prices, available_weights)
+    total_return = portfolio_value.iloc[-1] - 1
+    print(
+        f"Backtest period: {portfolio_value.index[0].date()} to "
+        f"{portfolio_value.index[-1].date()}"
+    )
+    print(f"Portfolio return: {total_return:.2%}")
+    plot_returns(portfolio_value, list(available_weights.index))
+
+
 if __name__ == "__main__":
     main()
